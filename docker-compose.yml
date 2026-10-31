@@ -1,0 +1,11 @@
+services:
+  kinopovazan-mcp:
+    build: .
+    image: kinopovazan-mcp:latest
+    command: ["http"]
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    environment:
+      KINOPOVAZAN_CALENDAR_TTL_SECONDS: "300"
+      KINOPOVAZAN_FILM_TTL_SECONDS: "900"

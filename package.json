@@ -1,0 +1,30 @@
+{
+  "name": "kinopovazan-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing the Kino Považan (kinopovazan.sk) cinema programme, built with xmcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "xmcp dev",
+    "build": "xmcp build",
+    "start": "node dist/http.js",
+    "start:http": "node dist/http.js",
+    "start:stdio": "node dist/stdio.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "xmcp": "^1.7.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@xmcp-dev/compiler": "^1.7.2",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3"
+  }
+}
