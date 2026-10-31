@@ -1,83 +1,62 @@
 # AGENTS.md
 
-Guidance for AI agents (and humans) working in this repository.
-
-## What this project is
-
-An [MCP](https://modelcontextprotocol.io) server written in TypeScript with
-[xmcp](https://xmcp.dev/) that exposes the programme of **Kino Považan**
-(Nové Mesto nad Váhom, Slovakia) from the public website `https://www.kinopovazan.sk`.
-
-It exposes four read-only tools: `get-program`, `get-program-range`,
-`list-screening-days` and `get-film`. It runs over **stdio** and **Streamable HTTP**.
-
-Data is scraped from the cinema's Cinemaware website: a monthly AJAX calendar
-(`/ajax/ajax_kalendar.php`) plus per-film pages containing schema.org JSON-LD.
-The source site is unofficial and can change without notice.
+MCP server (TypeScript, [xmcp](https://xmcp.dev/)) exposing the programme of Kino Považan
+(`https://www.kinopovazan.sk`) via four read-only tools: `get-program`, `get-program-range`,
+`list-screening-days`, `get-film`. Transports: stdio and Streamable HTTP.
+Setup, env variables, Docker usage and the scraping approach are described in `README.md`; don't duplicate them here.
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `npm install` | Install dependencies (Node.js ≥ 22, ESM only). |
-| `npm run dev` | xmcp dev server with reload. |
-| `npm run typecheck` | `tsc --noEmit`. Must pass. |
-| `npm test` | Offline parser/date tests (`node --test` + tsx, fixtures in `test/fixtures`). |
-| `npm run build` | Production build → `dist/http.js`, `dist/stdio.js`. |
-| `npm run start:http` / `npm run start:stdio` | Run the built server. |
-| `docker build -t kinopovazan-mcp .` | Build the multi-stage image. |
+- `npm run typecheck` and `npm test` must both pass after any change in `src/` or `test/`.
+- `npm test` runs offline (`node --test` via tsx) against `test/fixtures`; it never touches the network.
+- `npm run build` creates `dist/` (generated, git-ignored, as is `.xmcp/`). Run it before `npm run start:*`.
+- `npm run dev` starts the xmcp dev server with reload.
 
-Always run `npm run typecheck` and `npm test` after changing `src/`.
+## Code map
 
-## Layout
-
-```
-src/tools/       xmcp tools, auto-discovered (default export + schema + metadata)
-src/lib/
-  config.ts      environment-based settings, parsed once
-  http.ts        fetch with retry, timeout, in-memory TTL cache
-  dates.ts       Europe/Bratislava date helpers (today/tomorrow/formatting)
-  parse.ts       HTML + JSON-LD parsers (cheerio)
-  program.ts     merges calendar + film pages into screenings
-test/            parser and date tests, saved fixtures (no network)
-xmcp.config.ts   transports, HTTP host/port/endpoint, server metadata
-Dockerfile       multi-stage image with http + stdio entrypoints
-```
+- `src/tools/*.ts`: one tool per file, auto-discovered by xmcp (see `xmcp.config.ts`). No registry to edit.
+- `src/lib/config.ts`: all settings from `KINOPOVAZAN_*` env variables, read once at module load into the `config` object.
+- `src/lib/http.ts`: `fetchText` (2 attempts, timeout, `UpstreamError`) and `cached` (in-memory TTL cache).
+- `src/lib/parse.ts`: cheerio parsers for the month calendar and film pages (HTML + schema.org JSON-LD).
+- `src/lib/program.ts`: merges calendar and film pages into screenings (film pages fetched with a pool of 4).
+- `src/lib/dates.ts`: ISO date helpers; `todayIso`/`resolveDate` use `KINOPOVAZAN_TIMEZONE`.
 
 ## Conventions
 
-- **Tools:** add a file in `src/tools/` exporting `schema` (Zod), `metadata`
-  (`ToolMetadata` with `readOnlyHint: true`, `destructiveHint: false`) and a
-  default async handler returning `{ structuredContent: ... }`. xmcp registers it
-  automatically — do not edit a registry. Keep tool descriptions precise, since
-  they are what the model uses to pick a tool.
-- **Returned data:** film titles, genres and language labels stay in **Slovak**,
-  exactly as published by the cinema. Do not translate them.
-- **Errors:** upstream failures are turned into readable MCP errors; never return
-  raw HTML or stack traces to the client.
-- **Network:** only read-only `GET` requests to the configured base URL. Respect
-  the existing concurrency limit (max. 4 film pages) and caching.
-- **Tests:** parser changes should be covered by `test/parse.test.ts` using saved
-  fixtures. Tests must never hit the network; if the site changes, refresh the
-  fixtures manually.
-- **Style:** ESM, TypeScript strict mode, `@/` path alias for `src/`, small
-  focused modules, no new dependencies without a clear reason.
+- Tool file shape (copy `src/tools/get-program.ts`): export `schema` (Zod, with `.describe()` on every field),
+  `metadata: ToolMetadata` (`readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`,
+  `openWorldHint: true`) and a default async handler returning `{ structuredContent }`.
+  Tool and parameter descriptions are what the model reads to choose a tool, so keep them precise.
+- Input and upstream errors: `throw new Error("<readable message>")` (validation) or `UpstreamError` (HTTP).
+  Messages should tell the caller what to fix, e.g. `Invalid date "x". Use YYYY-MM-DD, "today" or "tomorrow".`
+- Imports from `src/` use the `@/` alias; `src/lib` modules import each other relatively.
+- Film titles, genres and language labels are returned in Slovak exactly as published. Don't translate them.
+- Only read-only `GET` requests, always through `fetchText`/`cached`. Don't bypass the cache or the pool of 4.
+- No new dependencies without a clear reason. The project is ESM and `strict` TypeScript.
+- Never use `console.log` in server code: on stdio it corrupts the protocol (xmcp is configured with `stdio.silent`).
+
+## Tests and fixtures
+
+- Parser or date changes need a test in `test/parse.test.ts`; use the existing `fixture()` helper.
+- Calendar fixtures contain the HTML from the `kalendar` field of the AJAX response, not the whole JSON:
+
+  ```bash
+  curl -s -H 'X-Requested-With: XMLHttpRequest' \
+    'https://www.kinopovazan.sk/ajax/ajax_kalendar.php?mesiac=2026-11-01&klient=218&kino=57&jazyk=' \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).kalendar))' \
+    > test/fixtures/calendar-2026-11.html
+  ```
+
+- Film fixture: save the page `https://www.kinopovazan.sk/klient-218/kino-57/stranka-972/film-<id>` as `film-<id>.html`.
+- Fixtures contain real dates. When refreshing them, update the expected values in the tests too.
+- Film pages list only upcoming screenings, so a fixture of a past film has no price or ticket link.
 
 ## Gotchas
 
-- `MCP_HTTP_HOST` / `MCP_HTTP_PORT` are baked into the bundle by `npm run build`,
-  not read at runtime. The Dockerfile sets `0.0.0.0`; the container listens on
-  port `3001`.
-- stdio must stay clean: logs go to stderr (`stdio.silent: true`). Never
-  `console.log` in server code.
-- The HTTP endpoint has **no authentication**; do not expose it publicly without
-  a reverse proxy or xmcp auth.
-- Past screenings have no price or ticket link, because film pages only list
-  upcoming screenings.
-- Data comes from undocumented HTML/DOM structures. Prefer defensive parsing and
-  update fixtures when the site changes.
-
-## Documentation
-
-`README.md` is the user-facing documentation (English). Keep it in sync when you
-change tools, environment variables, ports or the Docker setup.
+- `MCP_HTTP_HOST` / `MCP_HTTP_PORT` are baked into `dist/` at build time (see `xmcp.config.ts` and the Dockerfile),
+  not read at runtime. The Docker image builds with `0.0.0.0:3001`.
+- The Docker entrypoint selects the transport by its first argument (`http` default, `stdio`).
+- The HTTP endpoint has no authentication.
+- The parsers depend on the website's undocumented HTML/AJAX structure. When the site changes, update `src/lib/parse.ts`
+  and the fixtures together.
+- Update `README.md` when you change tools, environment variables, ports or the Docker setup.
